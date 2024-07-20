@@ -29,6 +29,8 @@ import com.reposilite.shared.notFoundError
 import com.reposilite.shared.unauthorized
 import com.reposilite.status.FailureFacade
 import com.reposilite.token.AccessTokenFacade
+import com.reposilite.token.Route
+import com.reposilite.token.RoutePermission
 import com.reposilite.token.api.AccessTokenDto
 import com.reposilite.token.api.CreateAccessTokenRequest
 import java.util.Hashtable
@@ -102,17 +104,28 @@ internal class LdapAuthenticator(
                 }
                 .map { (userDomain, username) -> userDomain to username.first() }
                 .filter({ (userDomain, _) -> disableUserPasswordAuthentication || createDirContext(user = userDomain, password = credentials.secret).isOk }) { unauthorized("Unauthorized LDAP access") }
-                .map { (_, username) ->
-                    accessTokenFacade.getAccessToken(username)
-                        ?: accessTokenFacade.createAccessToken(
-                            CreateAccessTokenRequest(
-                                type = ldapSettings.map { it.userType },
-                                name = username,
-                                secret = credentials.secret
-                            )
-                        ).accessToken
-                }
+                .map { (_, username) -> generateLdapToken(credentials, username) }
         }
+
+    private fun generateLdapToken(credentials: Credentials, username: String): AccessTokenDto {
+        var token = accessTokenFacade.getAccessToken(username)
+        if (token == null) {
+            token = accessTokenFacade.createAccessToken(
+                CreateAccessTokenRequest(
+                    type = ldapSettings.map { it.userType },
+                    name = username,
+                    secret = credentials.secret
+                )
+            ).accessToken
+            accessTokenFacade.addRoute(token.identifier, Route("/private", RoutePermission.WRITE))
+            accessTokenFacade.addRoute(token.identifier, Route("/snapshots", RoutePermission.WRITE))
+            accessTokenFacade.addRoute(token.identifier, Route("/releases", RoutePermission.WRITE))
+            accessTokenFacade.addRoute(token.identifier, Route("/private", RoutePermission.READ))
+            accessTokenFacade.addRoute(token.identifier, Route("/snapshots", RoutePermission.READ))
+            accessTokenFacade.addRoute(token.identifier, Route("/releases", RoutePermission.READ))
+        }
+        return token
+    }
 
     private fun createDirContext(user: String, password: String): Result<out DirContext, ErrorResponse> =
         Hashtable<String, String>()
